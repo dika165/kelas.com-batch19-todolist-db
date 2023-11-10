@@ -1,5 +1,10 @@
-import { getData, createData, updateData, deleteData } from "../repositories/users.js";
+import { getData, createData, updateData, deleteData, getDataByEmail } from "../repositories/users.js";
 import { responseError, responseSuccess } from "../utils/response.js";
+import bcrypt from 'bcrypt';
+import jwt from 'jsonwebtoken';
+
+const ACCESS_TOKEN_SECRET = "kelas.com";
+const REFRESH_TOKEN_SECRET = "backend";
 
 export const getUsers = async (request, response, next) => {
     try{
@@ -20,13 +25,16 @@ export const createUsers = async (request, response, next) => {
         let name = request.body.name;
         let email = request.body.email;
         let password = request.body.password;
-        const [result] = await createData(name, email, password);
-
-        if(result.insertId >0) {
-            responseSuccess(response, "success", result.insertId);
-        } else {
-            responseError(response, "Failed to create", 500)
-        }
+        let saltRound = 10;
+        bcrypt.hash(password, saltRound, async (error, hashedPass) => {
+        const [result] = await createData(name, email, hashedPass);
+            if(result.insertId >0) {
+                responseSuccess(response, "success", result.insertId);
+            } else {
+                responseError(response, "Failed to create", 500)
+            }
+        })
+        
     } catch(error) {
         next(error)
     }
@@ -38,7 +46,9 @@ export const updateUser = async (request, response, next) => {
         let id = request.params.id;
         let name = request.body.name;
         let email = request.body.email;
-        const [result] = await updateData(id, name, email);
+        let updatedBy = request.claims.id;
+        console.log(request.claims);
+        const [result] = await updateData(id, name, email, updatedBy);
         if (result.affectedRows > 0) {
             responseSuccess(response, "sucess update data", result)
         } else {
@@ -64,4 +74,58 @@ export const deleteUser = async(request, response, next) => {
         next(error)
     }
     
+}
+
+export const login = async (request, response, next) => {
+    try {
+        let user;
+        let email = request.body.email;
+        let password = request.body.password;
+
+        const [result] = await getDataByEmail(email);
+        if(result.length > 0) {
+            user = result[0];
+            bcrypt.compare(password, user.password, (error, isValid) => {
+                if(isValid){
+                    let payload = {
+                        id: user.user_id, 
+                        name: user.name, 
+                        email: user.email,
+                    }
+                    let accessToken = jwt.sign(payload, ACCESS_TOKEN_SECRET, {expiresIn:"15m"});
+                    let refreshToken = jwt.sign(payload, REFRESH_TOKEN_SECRET, {expiresIn:"30m"});
+                    let data ={
+                        access_token: accessToken, 
+                        refresh_token: refreshToken,
+                    }
+                    responseSuccess(response, "success", data)
+                } else {
+                    responseError(response, "email atau password salah")
+                }
+            })
+        } else {
+            responseError(response, "email atau password salah");
+        }
+    } catch (error) {
+        next(error)
+    }
+}
+
+export const tokenValidation = (request, response, next) => {
+    try {
+        let authToken = request.headers.authorization;
+        let accessToken = authToken && authToken.split(' ')[1];
+
+        jwt.verify(accessToken, ACCESS_TOKEN_SECRET, (error, payload) => {
+            if (!error){
+                console.log(payload);
+                request.claims = payload;
+                next()
+            } else {
+                responseError(response, error.message, 403)
+            }
+        })
+    } catch (error) {
+        next(error)
+    }
 }
